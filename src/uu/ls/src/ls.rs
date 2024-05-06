@@ -6,13 +6,13 @@
 // spell-checker:ignore (ToDO) somegroup nlink tabsize dired subdired dtype colorterm stringly
 
 use clap::{
-    builder::{NonEmptyStringValueParser, ValueParser},
+    builder::{NonEmptyStringValueParser, PossibleValue, ValueParser},
     crate_version, Arg, ArgAction, Command,
 };
 use glob::{MatchOptions, Pattern};
 use lscolors::{LsColors, Style};
 
-use number_prefix::NumberPrefix;
+use ansi_width::ansi_width;
 use std::{cell::OnceCell, num::IntErrorKind};
 use std::{collections::HashSet, io::IsTerminal};
 
@@ -34,9 +34,9 @@ use std::{
     os::unix::fs::{FileTypeExt, MetadataExt},
     time::Duration,
 };
-use term_grid::{Cell, Direction, Filling, Grid, GridOptions};
-use unicode_width::UnicodeWidthStr;
+use term_grid::{Direction, Filling, Grid, GridOptions};
 use uucore::error::USimpleError;
+use uucore::format::human::{human_readable, SizeFormat};
 #[cfg(all(unix, not(any(target_os = "android", target_os = "macos"))))]
 use uucore::fsxattr::has_acl;
 #[cfg(any(
@@ -62,6 +62,7 @@ use uucore::{
     format_usage,
     fs::display_permissions,
     parse_size::parse_size_u64,
+    shortcut_value_parser::ShortcutValueParser,
     version_cmp::version_cmp,
 };
 use uucore::{help_about, help_section, help_usage, parse_glob, show, show_error, show_warning};
@@ -310,13 +311,6 @@ enum Sort {
     Version,
     Extension,
     Width,
-}
-
-#[derive(PartialEq)]
-enum SizeFormat {
-    Bytes,
-    Binary,  // Powers of 1024, --human-readable, -h
-    Decimal, // Powers of 1000, --si
 }
 
 #[derive(PartialEq, Eq)]
@@ -1203,7 +1197,7 @@ pub fn uu_app() -> Command {
             Arg::new(options::FORMAT)
                 .long(options::FORMAT)
                 .help("Set the display format.")
-                .value_parser([
+                .value_parser(ShortcutValueParser::new([
                     "long",
                     "verbose",
                     "single-column",
@@ -1212,7 +1206,7 @@ pub fn uu_app() -> Command {
                     "across",
                     "horizontal",
                     "commas",
-                ])
+                ]))
                 .hide_possible_values(true)
                 .require_equals(true)
                 .overrides_with_all([
@@ -1303,9 +1297,11 @@ pub fn uu_app() -> Command {
             Arg::new(options::HYPERLINK)
                 .long(options::HYPERLINK)
                 .help("hyperlink file names WHEN")
-                .value_parser([
-                    "always", "yes", "force", "auto", "tty", "if-tty", "never", "no", "none",
-                ])
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("always").alias("yes").alias("force"),
+                    PossibleValue::new("auto").alias("tty").alias("if-tty"),
+                    PossibleValue::new("never").alias("no").alias("none"),
+                ]))
                 .require_equals(true)
                 .num_args(0..=1)
                 .default_missing_value("always")
@@ -1351,15 +1347,15 @@ pub fn uu_app() -> Command {
             Arg::new(options::QUOTING_STYLE)
                 .long(options::QUOTING_STYLE)
                 .help("Set quoting style.")
-                .value_parser([
-                    "literal",
-                    "shell",
-                    "shell-always",
-                    "shell-escape",
-                    "shell-escape-always",
-                    "c",
-                    "escape",
-                ])
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("literal"),
+                    PossibleValue::new("shell"),
+                    PossibleValue::new("shell-escape"),
+                    PossibleValue::new("shell-always"),
+                    PossibleValue::new("shell-escape-always"),
+                    PossibleValue::new("c").alias("c-maybe"),
+                    PossibleValue::new("escape"),
+                ]))
                 .overrides_with_all([
                     options::QUOTING_STYLE,
                     options::quoting::LITERAL,
@@ -1434,9 +1430,11 @@ pub fn uu_app() -> Command {
                         \tbirth time: birth, creation;",
                 )
                 .value_name("field")
-                .value_parser([
-                    "atime", "access", "use", "ctime", "status", "birth", "creation",
-                ])
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("atime").alias("access").alias("use"),
+                    PossibleValue::new("ctime").alias("status"),
+                    PossibleValue::new("birth").alias("creation"),
+                ]))
                 .hide_possible_values(true)
                 .require_equals(true)
                 .overrides_with_all([options::TIME, options::time::ACCESS, options::time::CHANGE]),
@@ -1496,7 +1494,7 @@ pub fn uu_app() -> Command {
                 .long(options::SORT)
                 .help("Sort by <field>: name, none (-U), time (-t), size (-S), extension (-X) or width")
                 .value_name("field")
-                .value_parser(["name", "none", "time", "size", "version", "extension", "width"])
+                .value_parser(ShortcutValueParser::new(["name", "none", "time", "size", "version", "extension", "width"]))
                 .require_equals(true)
                 .overrides_with_all([
                     options::SORT,
@@ -1744,9 +1742,11 @@ pub fn uu_app() -> Command {
             Arg::new(options::COLOR)
                 .long(options::COLOR)
                 .help("Color output based on file type.")
-                .value_parser([
-                    "always", "yes", "force", "auto", "tty", "if-tty", "never", "no", "none",
-                ])
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("always").alias("yes").alias("force"),
+                    PossibleValue::new("auto").alias("tty").alias("if-tty"),
+                    PossibleValue::new("never").alias("no").alias("none"),
+                ]))
                 .require_equals(true)
                 .num_args(0..=1),
         )
@@ -1757,7 +1757,7 @@ pub fn uu_app() -> Command {
                     "Append indicator with style WORD to entry names: \
                 none (default),  slash (-p), file-type (--file-type), classify (-F)",
                 )
-                .value_parser(["none", "slash", "file-type", "classify"])
+                .value_parser(ShortcutValueParser::new(["none", "slash", "file-type", "classify"]))
                 .overrides_with_all([
                     options::indicator_style::FILE_TYPE,
                     options::indicator_style::SLASH,
@@ -1788,9 +1788,11 @@ pub fn uu_app() -> Command {
                     --dereference-command-line-symlink-to-dir options are specified.",
                 )
                 .value_name("when")
-                .value_parser([
-                    "always", "yes", "force", "auto", "tty", "if-tty", "never", "no", "none",
-                ])
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("always").alias("yes").alias("force"),
+                    PossibleValue::new("auto").alias("tty").alias("if-tty"),
+                    PossibleValue::new("never").alias("no").alias("none"),
+                ]))
                 .default_missing_value("always")
                 .require_equals(true)
                 .num_args(0..=1)
@@ -2525,7 +2527,7 @@ fn display_items(
             names_vec.push(cell);
         }
 
-        let names = names_vec.into_iter();
+        let mut names = names_vec.into_iter();
 
         match config.format {
             Format::Columns => {
@@ -2536,20 +2538,19 @@ fn display_items(
             }
             Format::Commas => {
                 let mut current_col = 0;
-                let mut names = names;
                 if let Some(name) = names.next() {
-                    write!(out, "{}", name.contents)?;
-                    current_col = name.width as u16 + 2;
+                    write!(out, "{}", name)?;
+                    current_col = ansi_width(&name) as u16 + 2;
                 }
                 for name in names {
-                    let name_width = name.width as u16;
+                    let name_width = ansi_width(&name) as u16;
                     // If the width is 0 we print one single line
                     if config.width != 0 && current_col + name_width + 1 > config.width {
                         current_col = name_width + 2;
-                        write!(out, ",\n{}", name.contents)?;
+                        write!(out, ",\n{}", name)?;
                     } else {
                         current_col += name_width + 2;
-                        write!(out, ", {}", name.contents)?;
+                        write!(out, ", {}", name)?;
                     }
                 }
                 // Current col is never zero again if names have been printed.
@@ -2560,7 +2561,7 @@ fn display_items(
             }
             _ => {
                 for name in names {
-                    write!(out, "{}{}", name.contents, config.line_ending)?;
+                    write!(out, "{}{}", name, config.line_ending)?;
                 }
             }
         };
@@ -2594,7 +2595,7 @@ fn get_block_size(md: &Metadata, config: &Config) -> u64 {
 }
 
 fn display_grid(
-    names: impl Iterator<Item = Cell>,
+    names: impl Iterator<Item = String>,
     width: u16,
     direction: Direction,
     out: &mut BufWriter<Stdout>,
@@ -2608,38 +2609,36 @@ fn display_grid(
                 write!(out, "  ")?;
             }
             printed_something = true;
-            write!(out, "{}", name.contents)?;
+            write!(out, "{name}")?;
         }
         if printed_something {
             writeln!(out)?;
         }
     } else {
-        // TODO: To match gnu/tests/ls/stat-dtype.sh
-        // we might want to have Filling::Text("\t".to_string());
-        let filling = Filling::Spaces(2);
-        let mut grid = Grid::new(GridOptions { filling, direction });
-
-        for name in names {
-            let formatted_name = Cell {
-                contents: if quoted && !name.contents.starts_with('\'') {
-                    format!(" {}", name.contents)
-                } else {
-                    name.contents
-                },
-                width: name.width,
-            };
-            grid.add(formatted_name);
-        }
-
-        match grid.fit_into_width(width as usize) {
-            Some(output) => {
-                write!(out, "{output}")?;
-            }
-            // Width is too small for the grid, so we fit it in one column
-            None => {
-                write!(out, "{}", grid.fit_into_columns(1))?;
-            }
-        }
+        let names = if quoted {
+            names
+                .map(|n| {
+                    if n.starts_with('\'') {
+                        format!(" {n}")
+                    } else {
+                        n
+                    }
+                })
+                .collect()
+        } else {
+            names.collect()
+        };
+        let grid = Grid::new(
+            names,
+            GridOptions {
+                // TODO: To match gnu/tests/ls/stat-dtype.sh
+                // we might want to have Filling::Text("\t".to_string());
+                filling: Filling::Spaces(2),
+                direction,
+                width: width as usize,
+            },
+        );
+        write!(out, "{grid}")?;
     }
     Ok(())
 }
@@ -2784,8 +2783,7 @@ fn display_item_long(
 
         write!(output_display, " {} ", display_date(md, config)).unwrap();
 
-        let item_name =
-            display_item_name(item, config, None, String::new(), out, style_manager).contents;
+        let item_name = display_item_name(item, config, None, String::new(), out, style_manager);
 
         let displayed_item = if quoted && !item_name.starts_with('\'') {
             format!(" {}", item_name)
@@ -2875,7 +2873,7 @@ fn display_item_long(
         }
 
         let displayed_item =
-            display_item_name(item, config, None, String::new(), out, style_manager).contents;
+            display_item_name(item, config, None, String::new(), out, style_manager);
         let date_len = 12;
 
         write!(
@@ -3029,30 +3027,6 @@ fn display_date(metadata: &Metadata, config: &Config) -> String {
     }
 }
 
-// There are a few peculiarities to how GNU formats the sizes:
-// 1. One decimal place is given if and only if the size is smaller than 10
-// 2. It rounds sizes up.
-// 3. The human-readable format uses powers for 1024, but does not display the "i"
-//    that is commonly used to denote Kibi, Mebi, etc.
-// 4. Kibi and Kilo are denoted differently ("k" and "K", respectively)
-fn format_prefixed(prefixed: &NumberPrefix<f64>) -> String {
-    match prefixed {
-        NumberPrefix::Standalone(bytes) => bytes.to_string(),
-        NumberPrefix::Prefixed(prefix, bytes) => {
-            // Remove the "i" from "Ki", "Mi", etc. if present
-            let prefix_str = prefix.symbol().trim_end_matches('i');
-
-            // Check whether we get more than 10 if we round up to the first decimal
-            // because we want do display 9.81 as "9.9", not as "10".
-            if (10.0 * bytes).ceil() >= 100.0 {
-                format!("{:.0}{}", bytes.ceil(), prefix_str)
-            } else {
-                format!("{:.1}{}", (10.0 * bytes).ceil() / 10.0, prefix_str)
-            }
-        }
-    }
-}
-
 #[allow(dead_code)]
 enum SizeOrDeviceId {
     Size(String),
@@ -3095,13 +3069,7 @@ fn display_len_or_rdev(metadata: &Metadata, config: &Config) -> SizeOrDeviceId {
 }
 
 fn display_size(size: u64, config: &Config) -> String {
-    // NOTE: The human-readable behavior deviates from the GNU ls.
-    // The GNU ls uses binary prefixes by default.
-    match config.size_format {
-        SizeFormat::Binary => format_prefixed(&NumberPrefix::binary(size as f64)),
-        SizeFormat::Decimal => format_prefixed(&NumberPrefix::decimal(size as f64)),
-        SizeFormat::Bytes => size.to_string(),
-    }
+    human_readable(size, config.size_format)
 }
 
 #[cfg(unix)]
@@ -3166,13 +3134,9 @@ fn display_item_name(
     more_info: String,
     out: &mut BufWriter<Stdout>,
     style_manager: &mut StyleManager,
-) -> Cell {
+) -> String {
     // This is our return value. We start by `&path.display_name` and modify it along the way.
     let mut name = escape_name(&path.display_name, &config.quoting_style);
-
-    // We need to keep track of the width ourselves instead of letting term_grid
-    // infer it because the color codes mess up term_grid's width calculation.
-    let mut width = name.width();
 
     if config.hyperlink {
         name = create_hyperlink(&name, path);
@@ -3183,9 +3147,6 @@ fn display_item_name(
     }
 
     if config.format != Format::Long && !more_info.is_empty() {
-        // increment width here b/c name was given colors and name.width() is now the wrong
-        // size for display
-        width += more_info.width();
         name = more_info + &name;
     }
 
@@ -3213,7 +3174,6 @@ fn display_item_name(
 
         if let Some(c) = char_opt {
             name.push(c);
-            width += 1;
         }
     }
 
@@ -3285,14 +3245,10 @@ fn display_item_name(
                 pad_left(&path.security_context, pad_count)
             };
             name = format!("{security_context} {name}");
-            width += security_context.len() + 1;
         }
     }
 
-    Cell {
-        contents: name,
-        width,
-    }
+    name
 }
 
 fn create_hyperlink(name: &str, path: &PathData) -> String {
